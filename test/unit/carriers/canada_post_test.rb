@@ -30,6 +30,7 @@ class CanadaPostTest < Test::Unit::TestCase
     rate_estimates.rates.each do |rate|
       assert_instance_of RateEstimate, rate
       assert_instance_of DateTime, rate.delivery_date
+      assert_instance_of DateTime, rate.shipping_date
       assert_instance_of String, rate.service_name
       assert_instance_of Fixnum, rate.total_price
     end
@@ -63,6 +64,7 @@ class CanadaPostTest < Test::Unit::TestCase
     rate_estimates.rates.each do |rate|
       assert_instance_of RateEstimate, rate
       assert_instance_of DateTime, rate.delivery_date
+      assert_instance_of DateTime, rate.shipping_date
       assert_instance_of String, rate.service_name
       assert_instance_of Fixnum, rate.total_price
     end
@@ -91,6 +93,22 @@ class CanadaPostTest < Test::Unit::TestCase
       assert_equal [], rate_estimates.rates
       assert_equal [], rate_estimates.boxes
     end
+  end
+
+  def test_turn_around_time_default
+    @carrier.expects(:commit).with do |request, options|
+      parsed_request = Hash.from_xml(request)
+      parsed_request['eparcel']['ratesAndServicesRequest']['turnAroundTime'] == "24"
+    end
+    @carrier.find_rates(@origin, @destination, @line_items)
+  end
+
+  def test_turn_around_time
+    @carrier.expects(:commit).with do |request, options|
+      parsed_request = Hash.from_xml(request)
+      parsed_request['eparcel']['ratesAndServicesRequest']['turnAroundTime'] == "0"
+    end
+    @carrier.find_rates(@origin, @destination, @line_items, :turn_around_time => 0)
   end
 
   def test_build_line_items

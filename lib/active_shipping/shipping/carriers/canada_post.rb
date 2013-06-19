@@ -99,10 +99,10 @@ module ActiveMerchant
       
       def self.default_location
         {
-          :country => 'CA',
-          :province => 'ON',
-          :city => 'Ottawa',
-          :address1 => '61A York St',
+          :country     => 'CA',
+          :province    => 'ON',
+          :city        => 'Ottawa',
+          :address1    => '61A York St',
           :postal_code => 'K1N5T2'
         }
       end
@@ -160,6 +160,7 @@ module ActiveMerchant
               :service_code => service_code,
               :total_price => product.get_text('rate').to_s,
               :currency => 'CAD',
+              :shipping_date => product.get_text('shippingDate').to_s,
               :delivery_range => [product.get_text('deliveryDate').to_s] * 2
             )
           end

@@ -151,7 +151,7 @@ module ActiveMerchant
         response = commit(save_request(tracking_request), (options[:test] || false)).gsub(/<(\/)?.*?\:(.*?)>/, '<\1\2>')
         parse_tracking_response(response, options)
       end
-      
+
       protected
       def build_rate_request(origin, destination, packages, options={})
         imperial = ['US','LR','MM'].include?(origin.country_code(:alpha2))
@@ -173,7 +173,7 @@ module ActiveMerchant
           root_node << XmlNode.new('VariableOptions', 'SATURDAY_DELIVERY')
           
           root_node << XmlNode.new('RequestedShipment') do |rs|
-            rs << XmlNode.new('ShipTimestamp', options[:ship_timestamp] || Time.now)
+            rs << XmlNode.new('ShipTimestamp', ship_timestamp(options[:turn_around_time]))
             rs << XmlNode.new('DropoffType', options[:dropoff_type] || 'REGULAR_PICKUP')
             rs << XmlNode.new('PackagingType', options[:packaging_type] || 'YOUR_PACKAGING')
             
@@ -281,14 +281,7 @@ module ActiveMerchant
 
           delivery_timestamp = rated_shipment.get_text('DeliveryTimestamp').to_s
 
-          delivery_range = []
-          #if there's no delivery timestamp but we do have a transit time, use it
-          if delivery_timestamp.blank? and transit_time.present?
-            transit_range = parse_transit_times([transit_time,max_transit_time.presence || transit_time])
-            delivery_range = [Date.today + transit_range[0], Date.today + transit_range[1]]
-          else
-            delivery_range = [delivery_timestamp,delivery_timestamp]
-          end
+          delivery_range = delivery_range_from(transit_time, max_transit_time, delivery_timestamp, options)
 
           currency = handle_incorrect_currency_codes(rated_shipment.get_text('RatedShipmentDetails/ShipmentRateDetail/TotalNetCharge/Currency').to_s)
           rate_estimates << RateEstimate.new(origin, destination, @@name,
@@ -307,7 +300,35 @@ module ActiveMerchant
 
         RateResponse.new(success, message, Hash.from_xml(response), :rates => rate_estimates, :xml => response, :request => last_request, :log_xml => options[:log_xml])
       end
-      
+
+      def delivery_range_from(transit_time, max_transit_time, delivery_timestamp, options)
+        delivery_range = [delivery_timestamp, delivery_timestamp]
+        
+        #if there's no delivery timestamp but we do have a transit time, use it
+        if delivery_timestamp.blank? && transit_time.present?
+          transit_range  = parse_transit_times([transit_time,max_transit_time.presence || transit_time])
+          delivery_range = transit_range.map{|days| business_days_from(ship_date(options[:turn_around_time]), days)}
+        end
+
+        delivery_range
+      end
+
+      def business_days_from(date, days)
+        future_date = date
+        count       = 0
+
+        while count < days
+          future_date += 1.day
+          count += 1 if business_day?(future_date)
+        end
+
+        future_date
+      end
+
+      def business_day?(date)
+        (1..5).include?(date.wday)
+      end
+
       def parse_tracking_response(response, options)
         xml = REXML::Document.new(response)
         root_node = xml.elements['TrackReply']
@@ -316,18 +337,22 @@ module ActiveMerchant
         message = response_message(xml)
         
         if success
-          tracking_number, origin, destination, status, status_code, status_description = nil
+          tracking_number, origin, destination, status, status_code, status_description, delivery_signature = nil
           shipment_events = []
 
           tracking_details = root_node.elements['TrackDetails']
           tracking_number = tracking_details.get_text('TrackingNumber').to_s
-          
+
           status_code = tracking_details.get_text('StatusCode').to_s
           status_description = tracking_details.get_text('StatusDescription').to_s
           status = TRACKING_STATUS_CODES[status_code]
 
+          if status_code == 'DL' && tracking_details.get_text('SignatureProofOfDeliveryAvailable').to_s == 'true'
+            delivery_signature = tracking_details.get_text('DeliverySignatureName').to_s
+          end
+
           origin_node = tracking_details.elements['OriginLocationAddress']
-        
+
           if origin_node
             origin = Location.new(
                   :country =>     origin_node.get_text('CountryCode').to_s,
@@ -359,11 +384,10 @@ module ActiveMerchant
             
             location = Location.new(:city => city, :state => state, :postal_code => zip_code, :country => country)
             description = event.get_text('EventDescription').to_s
-            
-            # for now, just assume UTC, even though it probably isn't
-            time = Time.parse("#{event.get_text('Timestamp').to_s}")
-            zoneless_time = Time.utc(time.year, time.month, time.mday, time.hour, time.min, time.sec)
-            
+
+            time          = Time.parse("#{event.get_text('Timestamp').to_s}")
+            zoneless_time = time.utc
+
             shipment_events << ShipmentEvent.new(description, zoneless_time, location)
           end
           shipment_events = shipment_events.sort_by(&:time)
@@ -377,13 +401,24 @@ module ActiveMerchant
           :status => status,
           :status_code => status_code,
           :status_description => status_description,
+          :delivery_signature => delivery_signature,
           :shipment_events => shipment_events,
           :origin => origin,
           :destination => destination,
           :tracking_number => tracking_number
         )
       end
-            
+
+      def ship_timestamp(delay_in_hours)
+        delay_in_hours ||= 0
+        Time.now + delay_in_hours.hours
+      end
+
+      def ship_date(delay_in_hours)
+        delay_in_hours ||= 0
+        (Time.now + delay_in_hours.hours).to_date
+      end
+
       def response_status_node(document)
         document.elements['/*/Notifications/']
       end

@@ -14,17 +14,52 @@ class FedExTest < Test::Unit::TestCase
     assert_raises ArgumentError do FedEx.new(:password => '7777777') end
     assert_nothing_raised { FedEx.new(:key => '999999999', :password => '7777777', :account => '123', :login => '123')}
   end
-  
-  # def test_no_rates_response
-  #   @carrier.expects(:commit).returns(xml_fixture('fedex/empty_response'))
-  # 
-  #   response = @carrier.find_rates(
-  #     @locations[:ottawa],                                
-  #     @locations[:beverly_hills],            
-  #     @packages.values_at(:book, :wii)
-  #   )
-  #   assert_equal "WARNING - 556: There are no valid services available. ", response.message
-  # end
+
+  def test_business_days
+    today = DateTime.civil(2013, 3, 12, 0, 0, 0, "-4")
+
+    Timecop.freeze(today) do
+      assert_equal DateTime.civil(2013, 3, 13, 0, 0, 0, "-4"), @carrier.send(:business_days_from, today, 1)
+      assert_equal DateTime.civil(2013, 3, 15, 0, 0, 0, "-4"), @carrier.send(:business_days_from, today, 3)
+      assert_equal DateTime.civil(2013, 3, 19, 0, 0, 0, "-4"), @carrier.send(:business_days_from, today, 5)
+    end
+  end
+
+  def test_turn_around_time_default
+    mock_response = xml_fixture('fedex/ottawa_to_beverly_hills_rate_response').gsub('<v6:DeliveryTimestamp>2011-07-29</v6:DeliveryTimestamp>', '')
+
+    today = DateTime.civil(2013, 3, 11, 0, 0, 0, "-4")
+
+    Timecop.freeze(today) do
+      delivery_date = Date.today + 7.days # FIVE_DAYS in fixture response, plus weekend
+      timestamp = Time.now.iso8601
+      @carrier.expects(:commit).with do |request, options|
+        parsed_response = Hash.from_xml(request)
+        parsed_response['RateRequest']['RequestedShipment']['ShipTimestamp'] == timestamp
+      end.returns(mock_response)
+
+      destination = ActiveMerchant::Shipping::Location.from(@locations[:beverly_hills].to_hash, :address_type => :commercial)
+      response = @carrier.find_rates @locations[:ottawa], destination, @packages[:book], :test => true
+      assert_equal [delivery_date, delivery_date], response.rates.first.delivery_range
+    end
+  end
+
+  def test_turn_around_time
+    mock_response = xml_fixture('fedex/ottawa_to_beverly_hills_rate_response').gsub('<v6:DeliveryTimestamp>2011-07-29</v6:DeliveryTimestamp>', '')
+    Timecop.freeze(DateTime.new(2013, 3, 11)) do
+      delivery_date = Date.today + 8.days # FIVE_DAYS in fixture response, plus turn_around_time, plus weekend
+      timestamp = (Time.now + 1.day).iso8601
+      @carrier.expects(:commit).with do |request, options|
+        parsed_response = Hash.from_xml(request)
+        parsed_response['RateRequest']['RequestedShipment']['ShipTimestamp'] == timestamp
+      end.returns(mock_response)
+
+      destination = ActiveMerchant::Shipping::Location.from(@locations[:beverly_hills].to_hash, :address_type => :commercial)
+      response = @carrier.find_rates @locations[:ottawa], destination, @packages[:book], :turn_around_time => 24, :test => true
+
+      assert_equal [delivery_date, delivery_date], response.rates.first.delivery_range
+    end
+  end
   
   def test_find_tracking_info_should_return_a_tracking_response
     @carrier.expects(:commit).returns(@tracking_response)
@@ -59,6 +94,11 @@ class FedExTest < Test::Unit::TestCase
   def test_find_tracking_info_should_return_correct_status_description
     @carrier.expects(:commit).returns(@tracking_response)
     assert_equal 'delivered', @carrier.find_tracking_info('1Z5FX0076803466397').status_description.downcase
+  end
+
+  def test_find_tracking_info_should_return_delivery_signature
+    @carrier.expects(:commit).returns(@tracking_response)
+    assert_equal 'KKING', @carrier.find_tracking_info('077973360403984').delivery_signature
   end
 
   def test_find_tracking_info_should_return_destination_address
@@ -209,13 +249,18 @@ class FedExTest < Test::Unit::TestCase
     mock_response = xml_fixture('fedex/raterequest_reply').gsub('CAD', 'UKL')
 
     @carrier.expects(:commit).returns(mock_response)
-    rate_estimates = @carrier.find_rates( @locations[:ottawa],
-                                    @locations[:beverly_hills],
-                                    @packages.values_at(:book, :wii), :test => true)
 
-    #the above fixture will specify a transit time of 5 days
-    delivery_date = Date.today + 5
-    assert_equal delivery_date, rate_estimates.rates[0].delivery_date
+    today = DateTime.civil(2013, 3, 15, 0, 0, 0, "-4")
+
+    Timecop.freeze(today) do
+      rate_estimates = @carrier.find_rates( @locations[:ottawa],
+                                      @locations[:beverly_hills],
+                                      @packages.values_at(:book, :wii), :test => true)
+
+      #the above fixture will specify a transit time of 5 days, with 2 weekend days accounted for
+      delivery_date = Date.today + 7
+      assert_equal delivery_date, rate_estimates.rates[0].delivery_date
+    end
   end
 
 end
