@@ -241,6 +241,7 @@ module ActiveMerchant
           node << customer_number_node(options)
           node << contract_id_node(options)
           node << quote_type_node(options)
+          node << expected_mailing_date_node(options)
           options_node = shipping_options_node(RATES_OPTIONS, options)
           node << options_node if options_node && !options_node.children.count.zero?
           node << parcel_node(line_items, package)
@@ -625,6 +626,13 @@ module ActiveMerchant
 
       def quote_type_node(options)
         XmlNode.new("quote-type", 'commercial')
+      end
+
+      def expected_mailing_date_node(options)
+        if date = options[:expected_mailing_date]
+          date = date.strftime('%Y-%m-%d') if date.respond_to? :strftime
+          XmlNode.new("expected-mailing-date", date)
+        end
       end
 
       def parcel_node(line_items, package = nil, options ={})
